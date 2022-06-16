@@ -1,36 +1,18 @@
-/*
-  Nixie tube clock arduino sketch
-  Designed and created by Mistral
-*/
+/**
+ * Nixie Tube Clock using DS1307 RTC 
+ * module and 74HC595 shift registers
+ * 
+ * Author: Jazer Barclay
+ */
 
 #include <Wire.h>
-#include "RTClib.h"
+#include <RTClib.h>
 
-#define   SECOND     3
+#define   DATAPIN    4
 #define   LATCHPIN   5
 #define   CLOCKPIN   6
-#define   DATAPIN    4
 
-RTC_DS1307 RTC;
-
-// Update nixie?
-boolean update = true;
-
-// No of random gen numbers on each hour?
-int randomCount = 300;
-
-// Time storage as individual digits
-int h1 = 0;
-int h2 = 0;
-int m1 = 0;
-int m2 = 0;
-int s1 = 0;
-int s2 = 0;
-
-// Temp Time Allocation
-int hours = 0;
-int minutes = 0;
-int seconds = 0;
+RTC_DS1307 rtc;
 
 // Binary number representation in nibbles
 int bn0[] = {0,0,0,0};
@@ -44,149 +26,114 @@ int bn7[] = {0,1,1,1};
 int bn8[] = {1,0,0,0};
 int bn9[] = {1,0,0,1};
 
-void setup() {
-  Serial.begin(115200);
-  Wire.begin();
-  RTC.begin();
+// Store the last second value read
+int ls = 0; 
+
+void setup () {
   
-  // Setup pins for 74HC595 Shift Registers
+  // Wait for serial to be ready
+  while (!Serial);
+
+  // Start serial
+  Serial.begin(57600);
+   
+  // Setup pins for shift registers
   pinMode(LATCHPIN, OUTPUT);
   pinMode(CLOCKPIN, OUTPUT);
   pinMode(DATAPIN, OUTPUT);
-  
-  // Setup pin for 1Hz from RTC
-  pinMode(SECOND, INPUT);
+
+  // If rtc module missing then halt
+  if (!rtc.begin()) {
+    Serial.println("Couldn't find RTC");
+    while (1);
+  }
   
 }
 
-void loop() {
-  DateTime now = RTC.now();
 
-  // Update local stored time
-  updateTime(String(now.hour()), String(now.minute()), String(now.second()));
+void loop () {
   
-  // If new second, update
-  if (digitalRead(SECOND) == 1) {
-    if (seconds != s2) {
-      seconds = s2;
-      update = true;
-    }
-  }
-  
-  // If new hour then cycle randomCount no of chars on nixies
-  if (h2 == 0) {
-    String randH1 = String(h1);
-    String randH2 = String(h2);
-    String randM1 = String(m1);
-    String randM2 = String(m2);
-    String randS1 = String(s1);
-    String randS2 = String(s2);
-    for (int i = 0; i < randomCount; i++) {
-      h1 = random(10);
-      h2 = random(10);
-      m1 = random(10);
-      m2 = random(10);
-      s1 = random(10);
-      s2 = random(10);
-      
-      if (i >= (randomCount/10)*8) {
-        m1 = randM1.toInt();
-        delay(15);
-      }
-      if (i >= (randomCount/10)*8.5) {
-        h2 = randH2.toInt();
-        delay(15);
-      }
-      if (i >= (randomCount/10)*9) {
-        h1 = randH1.toInt();
-        delay(15);
-      }
-      if (i >= (randomCount/10)*9.5) {
-        m2 = randM2.toInt();
-        delay(15);
-      }
-      
-      updateTime(
-        String(h1) + String(h2), 
-        String(m1) + String(m2), 
-        String(s1) + String(s2)
-      );
-      setNixie();
-      printTime();
-      delay(30);
-    }
-    updateTime(String(now.hour()), String(now.minute()), String(now.second()));
-  }
-  
-  if (update) {
-    setNixie();
-    printTime();
-    update = false;
-  }
-}
+  // Get time from rtc
+  DateTime now = rtc.now();
 
-void updateTime(String hourss, String minutess, String secondss) {
-  
-  if (hourss.toInt() < 10) hourss = "0" + hourss;
-  if (minutess.toInt() < 10) minutess = "0" + minutess;
-  if (secondss.toInt() < 10) secondss = "0" + secondss;
-  
-  String tmph1 = hourss.substring(0,1);
-  String tmph2 = hourss.substring(1);
-  String tmpm1 = minutess.substring(0,1);
-  String tmpm2 = minutess.substring(1);
-  String tmps1 = secondss.substring(0,1);
-  String tmps2 = secondss.substring(1);
-  
-  h1 = tmph1.toInt();
-  h2 = tmph2.toInt();
-  m1 = tmpm1.toInt();
-  m2 = tmpm2.toInt();
-  s1 = tmps1.toInt();
-  s2 = tmps2.toInt();
+  // If second updates then update display 
+  if (ls != now.second()) {
+
+    // Store new second value for next check
+    ls = now.second();
+    
+    // Every hour shuffle numbers
+    if (now.second() == 0 && now.minute() == 0)
+      shuffleDisplay(now.hour(), now.minute(), 400);
+
+    // Set display to current time
+    updateDisplay(now.hour(), now.minute());
+
+    // Wait a bit before next check
+    delay(500);
+  }
   
 }
 
-void setNixie() {
+/**
+ * Shuffles the numbers on the display randomly
+ * with each digit locking in after some time
+ * 
+ * int hour - The actual hour
+ * int min  - The actual minute
+ * int shuffleCount - Number of times to randomise
+ */
+void shuffleDisplay(int hour, int min, int shuffleCount) {
+
+  // For each until shuffle count
+  for (int i = 1; i <= shuffleCount; i++) {
+
+    // Update display with random values (lock in based on ternary if)
+    updateDisplay( 
+      ((i > ((shuffleCount/4)*2)) ? (hour/10)*10 : random(10)*10) + 
+      ((i > ((shuffleCount/4)*4)) ?  hour%10     : random(10)), 
+      ((i > ((shuffleCount/4)*1)) ? (min/10)*10  : random(10)*10) + 
+      ((i > ((shuffleCount/4)*3)) ?  min%10      : random(10))
+    );
+
+    // Wait 15ms and as iteration increases, increase delay
+    delay(15);
+    if (i > shuffleCount / 4) delay(5);
+    if (i > shuffleCount / 3) delay(10);
+    if (i > shuffleCount / 2) delay(15);
+  }
+  
+}
+
+/**
+ * Writes the hour and minute to shift registers
+ */
+void updateDisplay(int hour, int min) {
   digitalWrite(LATCHPIN, LOW);
-  //updateRegister(compare(s2));
-  //updateRegister(compare(s1));
-  updateRegister(compare(m2));
-  updateRegister(compare(m1));
-  updateRegister(compare(h2));
-  updateRegister(compare(h1));
+  sendToShiftRegister(compare(min%10));
+  sendToShiftRegister(compare(min/10));
+  sendToShiftRegister(compare(hour%10));
+  sendToShiftRegister(compare(hour/10));
   digitalWrite(LATCHPIN, HIGH);
-  Serial.println("");
 }
 
-void updateRegister(int* binaryNumber) {
-  
-  sendToShiftRegister(DATAPIN, CLOCKPIN, binaryNumber);
-  
+/**
+ * Send array of bits to shift register
+ */
+void sendToShiftRegister(int* bn) {
+  for (int i = 0; i < 4; i++) {
+    digitalWrite(DATAPIN, bn[i]);
+    digitalWrite(CLOCKPIN, HIGH);
+    digitalWrite(CLOCKPIN, LOW);
+  }
 }
 
-void tick() {
-  // activate relay on second...
-  // maybe not a relay...
-  // too much clicking!
-  // 
-}
-
-void printTime() {
-  Serial.print(h1);
-  Serial.print(h2);
-  Serial.print(":");
-  Serial.print(m1);
-  Serial.print(m2);
-  Serial.print(":");
-  Serial.print(s1);
-  Serial.println(s2);
-}
-
+/**
+ * Returns the nibble associated with 
+ * the given decimal value
+ */
 int* compare(int i) {
   switch(i) {
-    case 0:
-      return bn0;
     case 1:
       return bn1;
     case 2:
@@ -206,15 +153,8 @@ int* compare(int i) {
       return bn8;
     case 9:
       return bn9;
+    case 0:
     default:
       return bn0;
-  }
-}
-
-void sendToShiftRegister(uint8_t dataPin, uint8_t clockPin, int* bn) {
-  for (int i = 0; i < 4; i++)  {                                                                                                                              
-    digitalWrite(DATAPIN, bn[i]);
-    digitalWrite(CLOCKPIN, HIGH);
-    digitalWrite(CLOCKPIN, LOW);
   }
 }
